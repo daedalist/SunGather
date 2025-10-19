@@ -16,7 +16,8 @@ import pytest
 import getopt
 import tempfile
 import os
-from unittest.mock import Mock
+import logging
+from unittest.mock import Mock, MagicMock, patch
 
 
 class TestModuleStructure:
@@ -523,3 +524,178 @@ registers:
         assert result['host'] is None
         assert result['port'] == 502
         assert result['connection'] == 'modbus'
+
+
+class TestLoggingSetup:
+    """Test logging setup functions."""
+
+    def get_logging_functions(self):
+        """Extract logging functions from source using exec."""
+        with open('SunGather/sungather.py', 'r') as f:
+            source = f.read()
+
+        namespace = {}
+        source_lines = source.split('\n')
+        # Remove sys.exit() line at module level
+        if 'sys.exit()' in source_lines[-1] or 'sys.exit()' in source_lines[-2]:
+            source_lines = [line for line in source_lines if line.strip() != 'sys.exit()']
+
+        modified_source = '\n'.join(source_lines)
+        exec(modified_source, namespace)
+
+        return {
+            'setup_console_logging': namespace['setup_console_logging'],
+            'setup_file_logging': namespace['setup_file_logging']
+        }
+
+    def test_setup_console_logging_with_cli_override(self):
+        """Test setup_console_logging uses CLI level when provided."""
+        funcs = self.get_logging_functions()
+        setup_console_logging = funcs['setup_console_logging']
+
+        # Create a mock logger with handler
+        mock_logger = MagicMock()
+        mock_handler = MagicMock()
+        mock_logger.handlers = [mock_handler]
+
+        # CLI level should override config level
+        setup_console_logging(mock_logger, 'WARNING', cli_level=10)
+
+        mock_handler.setLevel.assert_called_once_with(10)
+
+    def test_setup_console_logging_without_cli_override(self):
+        """Test setup_console_logging uses config level when no CLI override."""
+        funcs = self.get_logging_functions()
+        setup_console_logging = funcs['setup_console_logging']
+
+        mock_logger = MagicMock()
+        mock_handler = MagicMock()
+        mock_logger.handlers = [mock_handler]
+
+        # Should use config level when no CLI override
+        setup_console_logging(mock_logger, 'DEBUG', cli_level=None)
+
+        mock_handler.setLevel.assert_called_once_with('DEBUG')
+
+    def test_setup_console_logging_with_numeric_level(self):
+        """Test setup_console_logging handles numeric log levels."""
+        funcs = self.get_logging_functions()
+        setup_console_logging = funcs['setup_console_logging']
+
+        mock_logger = MagicMock()
+        mock_handler = MagicMock()
+        mock_logger.handlers = [mock_handler]
+
+        setup_console_logging(mock_logger, 20, cli_level=None)
+
+        mock_handler.setLevel.assert_called_once_with(20)
+
+    def test_setup_file_logging_disabled(self):
+        """Test setup_file_logging returns False when level is OFF."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        mock_logger = MagicMock()
+        mock_logger.handlers = [MagicMock()]
+
+        result = setup_file_logging(mock_logger, 'OFF')
+
+        assert result is False
+        # Should not add any handlers
+        mock_logger.addHandler.assert_not_called()
+
+    def test_setup_file_logging_invalid_level(self):
+        """Test setup_file_logging raises ValueError for invalid level."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        mock_logger = MagicMock()
+        mock_logger.handlers = [MagicMock()]
+
+        with pytest.raises(ValueError, match="Invalid file log level 'INVALID'"):
+            setup_file_logging(mock_logger, 'INVALID')
+
+    @patch('logging.handlers.RotatingFileHandler')
+    def test_setup_file_logging_creates_handler(self, mock_rotating_handler):
+        """Test setup_file_logging creates RotatingFileHandler."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        mock_logger = MagicMock()
+        mock_console_handler = MagicMock()
+        mock_console_handler.formatter = 'test_formatter'
+        mock_logger.handlers = [mock_console_handler]
+
+        mock_file_handler = MagicMock()
+        mock_rotating_handler.return_value = mock_file_handler
+
+        result = setup_file_logging(mock_logger, 'INFO', '/logs/')
+
+        # Should create RotatingFileHandler with correct params
+        mock_rotating_handler.assert_called_once_with(
+            '/logs/SunGather.log',
+            mode='w',
+            encoding='utf-8',
+            maxBytes=10485760,
+            backupCount=10
+        )
+
+        # Should set formatter from console handler
+        assert mock_file_handler.formatter == 'test_formatter'
+
+        # Should set level
+        mock_file_handler.setLevel.assert_called_once_with('INFO')
+
+        # Should add handler to logger
+        mock_logger.addHandler.assert_called_once_with(mock_file_handler)
+
+        # Should return True
+        assert result is True
+
+    @patch('logging.handlers.RotatingFileHandler')
+    def test_setup_file_logging_all_valid_levels(self, mock_rotating_handler):
+        """Test setup_file_logging accepts all valid log levels."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+
+        for level in valid_levels:
+            mock_logger = MagicMock()
+            mock_logger.handlers = [MagicMock()]
+            mock_rotating_handler.reset_mock()
+
+            result = setup_file_logging(mock_logger, level)
+
+            assert result is True
+            mock_rotating_handler.assert_called_once()
+
+    @patch('logging.handlers.RotatingFileHandler')
+    def test_setup_file_logging_default_folder(self, mock_rotating_handler):
+        """Test setup_file_logging uses current directory by default."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        mock_logger = MagicMock()
+        mock_logger.handlers = [MagicMock()]
+
+        setup_file_logging(mock_logger, 'WARNING')
+
+        # Should use empty string prefix (current directory)
+        args, kwargs = mock_rotating_handler.call_args
+        assert args[0] == 'SunGather.log'
+
+    @patch('logging.handlers.RotatingFileHandler')
+    def test_setup_file_logging_custom_folder(self, mock_rotating_handler):
+        """Test setup_file_logging uses provided log folder."""
+        funcs = self.get_logging_functions()
+        setup_file_logging = funcs['setup_file_logging']
+
+        mock_logger = MagicMock()
+        mock_logger.handlers = [MagicMock()]
+
+        setup_file_logging(mock_logger, 'ERROR', '/var/log/')
+
+        # Should use custom folder
+        args, kwargs = mock_rotating_handler.call_args
+        assert args[0] == '/var/log/SunGather.log'

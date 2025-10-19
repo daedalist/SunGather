@@ -128,6 +128,69 @@ def build_inverter_config(config_dict):
     }
 
 
+def setup_console_logging(logger, console_level, cli_level=None):
+    """Configure console logging level.
+
+    Args:
+        logger: Logger instance to configure
+        console_level: Console log level from config (DEBUG/INFO/WARNING/ERROR or numeric)
+        cli_level: Optional command-line override log level (numeric)
+
+    Returns:
+        None (modifies logger in place)
+
+    Raises:
+        ValueError: If log level is invalid
+    """
+    # CLI level takes precedence
+    if cli_level is not None:
+        level = cli_level
+    else:
+        # Convert string level to numeric if needed
+        if isinstance(console_level, str):
+            level = console_level
+        else:
+            level = console_level
+
+    logger.handlers[0].setLevel(level)
+
+
+def setup_file_logging(logger, file_level, log_folder=''):
+    """Configure file logging.
+
+    Args:
+        logger: Logger instance to configure
+        file_level: File log level (DEBUG/INFO/WARNING/ERROR) or 'OFF' to disable
+        log_folder: Directory for log files (default: current directory)
+
+    Returns:
+        bool: True if file logging was configured, False if disabled
+
+    Raises:
+        ValueError: If file_level is invalid
+    """
+    if file_level == "OFF":
+        return False
+
+    valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR"]
+    if file_level not in valid_levels:
+        raise ValueError(
+            f"Invalid file log level '{file_level}'. Valid options: DEBUG, INFO, WARNING, ERROR, OFF"
+        )
+
+    logfile = log_folder + "SunGather.log"
+    fh = logging.handlers.RotatingFileHandler(
+        logfile, mode='w', encoding='utf-8',
+        maxBytes=10485760,  # 10MB
+        backupCount=10  # Keep 10 files = 100MB total
+    )
+    fh.formatter = logger.handlers[0].formatter
+    fh.setLevel(file_level)
+    logger.addHandler(fh)
+
+    return True
+
+
 def parse_arguments(argv=None):
     """Parse command line arguments.
 
@@ -240,23 +303,19 @@ def main():
         logging.error(f"Invalid inverter configuration: {err}")
         sys.exit(1)
 
-    if loglevel is not None:
-        logger.handlers[0].setLevel(loglevel)
-    else:
-        logger.handlers[0].setLevel(config_inverter['log_console'])
+    # Configure console logging
+    setup_console_logging(logger, config_inverter['log_console'], loglevel)
 
-    if not config_inverter['log_file'] == "OFF":
-        if config_inverter['log_file'] == "DEBUG" or config_inverter['log_file'] == "INFO" or config_inverter['log_file'] == "WARNING" or config_inverter['log_file'] == "ERROR":
-            logfile = logfolder + "SunGather.log"
-            fh = logging.handlers.RotatingFileHandler(logfile, mode='w', encoding='utf-8', maxBytes=10485760, backupCount=10) # Log 10mb files, 10 x files = 100mb
-            fh.formatter = logger.handlers[0].formatter
-            fh.setLevel(config_inverter['log_file'])
-            logger.addHandler(fh)
-        else:
-            logging.warning(f"log_file: Valid options are: DEBUG, INFO, WARNING, ERROR and OFF")
+    # Configure file logging
+    try:
+        file_logging_enabled = setup_file_logging(logger, config_inverter['log_file'], logfolder)
+    except ValueError as err:
+        logging.warning(str(err))
+        file_logging_enabled = False
 
+    # Log configuration status
     logging.info(f"Logging to console set to: {logging.getLevelName(logger.handlers[0].level)}")
-    if logger.handlers.__len__() == 3:
+    if file_logging_enabled:
         logging.info(f"Logging to file set to: {logging.getLevelName(logger.handlers[2].level)}")
     
     logging.debug(f'Inverter Config Loaded: {config_inverter}')    
