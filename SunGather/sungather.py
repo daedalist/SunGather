@@ -13,51 +13,108 @@ import time
 import signal
 import traceback
 
-def main():
-    configfilename = 'config.yaml'
-    registersfilename = 'registers-sungrow.yaml'
-    logfolder = ''
 
-    try:
-        opts, args = getopt.getopt(sys.argv[1:],"hc:r:l:v:", "runonce")
-    except getopt.GetoptError:
-        sys.exit(f'No options passed via command line, use -h to see all options')
+def print_help():
+    """Print help message for command line usage."""
+    print(f'\nSunGather {__version__}')
+    print(f'\nhttps://sungather.app')
+    print(f'usage: python3 sungather.py [options]')
+    print(f'\nCommandling arguments override any config file settings')
+    print(f'Options and arguments:')
+    print(f'-c config.yaml             : Specify config file.')
+    print(f'-r registers-file.yaml     : Specify registers file.')
+    print(f'-l /logs/                  : Specify folder to store logs.')
+    print(f'-v 30                      : Logging Level, 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error')
+    print(f'--runonce                  : Run once then exit')
+    print(f'-h                         : print this help message and exit (also --help)')
+    print(f'\nExample:')
+    print(f'python3 sungather.py -c /full/path/config.yaml\n')
 
+
+def parse_arguments(argv=None):
+    """Parse command line arguments.
+
+    Args:
+        argv: Command line arguments (defaults to sys.argv[1:])
+
+    Returns:
+        dict: Parsed arguments with keys:
+            - config_file: Path to config file
+            - registers_file: Path to registers file
+            - log_folder: Path to log folder
+            - log_level: Optional logging level (10-50)
+            - run_once: Boolean flag for single run mode
+            - show_help: Boolean flag indicating help was requested
+
+    Raises:
+        getopt.GetoptError: If argument parsing fails
+        ValueError: If argument validation fails
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Default values
+    result = {
+        'config_file': 'config.yaml',
+        'registers_file': 'registers-sungrow.yaml',
+        'log_folder': '',
+        'log_level': None,
+        'run_once': False,
+        'show_help': False
+    }
+
+    # Parse arguments - let getopt.GetoptError propagate
+    opts, args = getopt.getopt(argv, "hc:r:l:v:", "runonce")
 
     for opt, arg in opts:
         if opt == '-h':
-            print(f'\nSunGather {__version__}')
-            print(f'\nhttps://sungather.app')
-            print(f'usage: python3 sungather.py [options]')
-            print(f'\nCommandling arguments override any config file settings')
-            print(f'Options and arguments:')
-            print(f'-c config.yaml             : Specify config file.')
-            print(f'-r registers-file.yaml     : Specify registers file.')
-            print(f'-l /logs/                  : Specify folder to store logs.')
-            print(f'-v 30                      : Logging Level, 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error')
-            print(f'--runonce                  : Run once then exit')
-            print(f'-h                         : print this help message and exit (also --help)')
-            print(f'\nExample:')
-            print(f'python3 sungather.py -c /full/path/config.yaml\n')
-            sys.exit()
+            result['show_help'] = True
+            return result
         elif opt == '-c':
-            configfilename = arg
+            result['config_file'] = arg
         elif opt == '-r':
-            registersfilename = arg
+            result['registers_file'] = arg
         elif opt == '-l':
-            logfolder = arg    
-        elif opt  == '-v':
-            if arg.isnumeric():
-                if int(arg) >= 0 and int(arg) <= 50:
-                    loglevel = int(arg)
-                else:
-                    logging.error(f"Valid verbose options: 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error")
-                    sys.exit(2)        
-            else:
-                logging.error(f"Valid verbose options: 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error")
-                sys.exit(2) 
+            result['log_folder'] = arg
+        elif opt == '-v':
+            if not arg.isnumeric():
+                raise ValueError(
+                    f"Invalid log level '{arg}'. Valid options: 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error"
+                )
+            level = int(arg)
+            if level < 0 or level > 50:
+                raise ValueError(
+                    f"Log level {level} out of range. Valid options: 10 = Debug, 20 = Info, 30 = Warning (default), 40 = Error"
+                )
+            result['log_level'] = level
         elif opt == '--runonce':
-            runonce = True
+            result['run_once'] = True
+
+    return result
+
+
+def main():
+    # Parse command line arguments
+    try:
+        args = parse_arguments()
+    except getopt.GetoptError as e:
+        logging.error(f'Invalid command line arguments: {e}')
+        sys.exit(2)
+    except ValueError as e:
+        logging.error(str(e))
+        sys.exit(2)
+
+    # Handle help request
+    if args['show_help']:
+        print_help()
+        sys.exit(0)
+
+    # Extract arguments
+    configfilename = args['config_file']
+    registersfilename = args['registers_file']
+    logfolder = args['log_folder']
+    loglevel = args['log_level']
+    runonce = args['run_once']
 
     logging.info(f'Starting SunGather {__version__}')
     logging.info(f'Need Help? https://github.com/bohdan-s/SunGather')
@@ -97,7 +154,7 @@ def main():
         "level": configfile['inverter'].get('level',1)
     }
 
-    if 'loglevel' in locals():
+    if loglevel is not None:
         logger.handlers[0].setLevel(loglevel)
     else:
         logger.handlers[0].setLevel(config_inverter['log_console'])
@@ -185,7 +242,7 @@ def main():
         process_time = round(loop_end - loop_start, 2)
         logging.debug(f'Processing Time: {process_time} secs')
 
-        if 'runonce' in locals():
+        if runonce:
             sys.exit(0)
         
         # Sleep until the next scan
