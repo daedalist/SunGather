@@ -31,6 +31,103 @@ def print_help():
     print(f'python3 sungather.py -c /full/path/config.yaml\n')
 
 
+def load_config(filename):
+    """Load and parse configuration YAML file.
+
+    Args:
+        filename: Path to config.yaml file
+
+    Returns:
+        dict: Parsed configuration content
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If config file is invalid or missing required fields
+    """
+    try:
+        with open(filename, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Config file not found: {filename}")
+    except yaml.YAMLError as err:
+        raise ValueError(f"Invalid YAML in config file {filename}: {err}")
+    except Exception as err:
+        raise ValueError(f"Failed loading config {filename}: {err}")
+
+    if not config:
+        raise ValueError(f"Config file {filename} is empty")
+
+    if not config.get('inverter'):
+        raise ValueError("Config file missing required 'inverter' section")
+
+    return config
+
+
+def load_registers(filename):
+    """Load and parse registers YAML file.
+
+    Args:
+        filename: Path to registers file
+
+    Returns:
+        dict: Parsed registers content
+
+    Raises:
+        FileNotFoundError: If registers file doesn't exist
+        ValueError: If registers file is invalid
+    """
+    try:
+        with open(filename, encoding="utf-8") as f:
+            registers = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Registers file not found: {filename}")
+    except yaml.YAMLError as err:
+        raise ValueError(f"Invalid YAML in registers file {filename}: {err}")
+    except Exception as err:
+        raise ValueError(f"Failed loading registers {filename}: {err}")
+
+    if not registers:
+        raise ValueError(f"Registers file {filename} is empty")
+
+    return registers
+
+
+def build_inverter_config(config_dict):
+    """Build inverter configuration from parsed config file.
+
+    Args:
+        config_dict: Parsed config.yaml content
+
+    Returns:
+        dict: Inverter configuration with defaults applied
+
+    Raises:
+        ValueError: If inverter section is missing or invalid
+    """
+    if 'inverter' not in config_dict:
+        raise ValueError("Config missing 'inverter' section")
+
+    inverter = config_dict['inverter']
+    if inverter is None:
+        inverter = {}
+
+    return {
+        "host": inverter.get('host', None),
+        "port": inverter.get('port', 502),
+        "timeout": inverter.get('timeout', 10),
+        "retries": inverter.get('retries', 3),
+        "slave": inverter.get('slave', 0x01),
+        "scan_interval": inverter.get('scan_interval', 30),
+        "connection": inverter.get('connection', "modbus"),
+        "model": inverter.get('model', None),
+        "smart_meter": inverter.get('smart_meter', False),
+        "use_local_time": inverter.get('use_local_time', False),
+        "log_console": inverter.get('log_console', 'WARNING'),
+        "log_file": inverter.get('log_file', 'OFF'),
+        "level": inverter.get('level', 1)
+    }
+
+
 def parse_arguments(argv=None):
     """Parse command line arguments.
 
@@ -120,39 +217,28 @@ def main():
     logging.info(f'Need Help? https://github.com/bohdan-s/SunGather')
     logging.info(f'NEW HomeAssistant Add-on: https://github.com/bohdan-s/hassio-repository')
 
+    # Load configuration files
     try:
-        configfile = yaml.safe_load(open(configfilename, encoding="utf-8"))
+        configfile = load_config(configfilename)
         logging.info(f"Loaded config: {configfilename}")
-    except Exception as err:
-        logging.error(f"Failed: Loading config: {configfilename} \n\t\t\t     {err}")
+    except (FileNotFoundError, ValueError) as err:
+        logging.error(f"Failed loading config: {err}")
         sys.exit(1)
-    if not configfile.get('inverter'):
-        logging.error(f"Failed Loading config, missing Inverter settings")
-        sys.exit(f"Failed Loading config, missing Inverter settings")   
 
     try:
-        registersfile = yaml.safe_load(open(registersfilename, encoding="utf-8"))
+        registersfile = load_registers(registersfilename)
         logging.info(f"Loaded registers: {registersfilename}")
         logging.info(f"Registers file version: {registersfile.get('version','UNKNOWN')}")
-    except Exception as err:
-        logging.error(f"Failed: Loading registers: {registersfilename}  {err}")
-        sys.exit(f"Failed: Loading registers: {registersfilename} {err}")
-   
-    config_inverter = {
-        "host": configfile['inverter'].get('host',None),
-        "port": configfile['inverter'].get('port',502),
-        "timeout": configfile['inverter'].get('timeout',10),
-        "retries": configfile['inverter'].get('retries',3),
-        "slave": configfile['inverter'].get('slave',0x01),
-        "scan_interval": configfile['inverter'].get('scan_interval',30),
-        "connection": configfile['inverter'].get('connection',"modbus"),
-        "model": configfile['inverter'].get('model',None),
-        "smart_meter": configfile['inverter'].get('smart_meter',False),
-        "use_local_time": configfile['inverter'].get('use_local_time',False),
-        "log_console": configfile['inverter'].get('log_console','WARNING'),
-        "log_file": configfile['inverter'].get('log_file','OFF'),
-        "level": configfile['inverter'].get('level',1)
-    }
+    except (FileNotFoundError, ValueError) as err:
+        logging.error(f"Failed loading registers: {err}")
+        sys.exit(1)
+
+    # Build inverter configuration
+    try:
+        config_inverter = build_inverter_config(configfile)
+    except ValueError as err:
+        logging.error(f"Invalid inverter configuration: {err}")
+        sys.exit(1)
 
     if loglevel is not None:
         logger.handlers[0].setLevel(loglevel)

@@ -14,6 +14,8 @@ Tests cover:
 
 import pytest
 import getopt
+import tempfile
+import os
 from unittest.mock import Mock
 
 
@@ -256,3 +258,268 @@ class TestArgumentParsing:
             assert result['config_file'] == 'test.yaml'
         finally:
             sys.argv = original_argv
+
+
+class TestConfigurationLoading:
+    """Test configuration loading functions."""
+
+    def get_config_functions(self):
+        """Extract configuration functions from source using exec."""
+        import ast
+        with open('SunGather/sungather.py', 'r') as f:
+            source = f.read()
+
+        namespace = {}
+        source_lines = source.split('\n')
+        # Remove sys.exit() line at module level
+        if 'sys.exit()' in source_lines[-1] or 'sys.exit()' in source_lines[-2]:
+            source_lines = [line for line in source_lines if line.strip() != 'sys.exit()']
+
+        modified_source = '\n'.join(source_lines)
+        exec(modified_source, namespace)
+
+        return {
+            'load_config': namespace['load_config'],
+            'load_registers': namespace['load_registers'],
+            'build_inverter_config': namespace['build_inverter_config']
+        }
+
+    def test_load_config_success(self):
+        """Test load_config with valid config file."""
+        funcs = self.get_config_functions()
+        load_config = funcs['load_config']
+
+        # Create a temporary valid config file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("""
+inverter:
+  host: 192.168.1.100
+  port: 502
+""")
+            config_file = f.name
+
+        try:
+            result = load_config(config_file)
+            assert result is not None
+            assert 'inverter' in result
+            assert result['inverter']['host'] == '192.168.1.100'
+            assert result['inverter']['port'] == 502
+        finally:
+            os.unlink(config_file)
+
+    def test_load_config_file_not_found(self):
+        """Test load_config raises FileNotFoundError for missing file."""
+        funcs = self.get_config_functions()
+        load_config = funcs['load_config']
+
+        with pytest.raises(FileNotFoundError, match="Config file not found"):
+            load_config('/nonexistent/config.yaml')
+
+    def test_load_config_invalid_yaml(self):
+        """Test load_config raises ValueError for invalid YAML."""
+        funcs = self.get_config_functions()
+        load_config = funcs['load_config']
+
+        # Create a temporary file with invalid YAML
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("invalid: yaml: content:\n  - bad indentation")
+            config_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="Invalid YAML"):
+                load_config(config_file)
+        finally:
+            os.unlink(config_file)
+
+    def test_load_config_empty_file(self):
+        """Test load_config raises ValueError for empty file."""
+        funcs = self.get_config_functions()
+        load_config = funcs['load_config']
+
+        # Create an empty config file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("")
+            config_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="is empty"):
+                load_config(config_file)
+        finally:
+            os.unlink(config_file)
+
+    def test_load_config_missing_inverter_section(self):
+        """Test load_config raises ValueError when inverter section is missing."""
+        funcs = self.get_config_functions()
+        load_config = funcs['load_config']
+
+        # Create config without inverter section
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("""
+exports:
+  - name: console
+    enabled: true
+""")
+            config_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="missing required 'inverter' section"):
+                load_config(config_file)
+        finally:
+            os.unlink(config_file)
+
+    def test_load_registers_success(self):
+        """Test load_registers with valid registers file."""
+        funcs = self.get_config_functions()
+        load_registers = funcs['load_registers']
+
+        # Create a temporary valid registers file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("""
+version: 1.0.0
+registers:
+  - address: 5000
+    name: daily_power_yields
+""")
+            registers_file = f.name
+
+        try:
+            result = load_registers(registers_file)
+            assert result is not None
+            assert 'version' in result
+            assert result['version'] == '1.0.0'
+        finally:
+            os.unlink(registers_file)
+
+    def test_load_registers_file_not_found(self):
+        """Test load_registers raises FileNotFoundError for missing file."""
+        funcs = self.get_config_functions()
+        load_registers = funcs['load_registers']
+
+        with pytest.raises(FileNotFoundError, match="Registers file not found"):
+            load_registers('/nonexistent/registers.yaml')
+
+    def test_load_registers_invalid_yaml(self):
+        """Test load_registers raises ValueError for invalid YAML."""
+        funcs = self.get_config_functions()
+        load_registers = funcs['load_registers']
+
+        # Create a temporary file with invalid YAML
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("invalid: yaml: content:\n  - bad indentation")
+            registers_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="Invalid YAML"):
+                load_registers(registers_file)
+        finally:
+            os.unlink(registers_file)
+
+    def test_load_registers_empty_file(self):
+        """Test load_registers raises ValueError for empty file."""
+        funcs = self.get_config_functions()
+        load_registers = funcs['load_registers']
+
+        # Create an empty registers file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("")
+            registers_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="is empty"):
+                load_registers(registers_file)
+        finally:
+            os.unlink(registers_file)
+
+    def test_build_inverter_config_with_defaults(self):
+        """Test build_inverter_config applies default values."""
+        funcs = self.get_config_functions()
+        build_inverter_config = funcs['build_inverter_config']
+
+        config = {
+            'inverter': {
+                'host': '192.168.1.100'
+            }
+        }
+
+        result = build_inverter_config(config)
+
+        assert result['host'] == '192.168.1.100'
+        assert result['port'] == 502  # default
+        assert result['timeout'] == 10  # default
+        assert result['retries'] == 3  # default
+        assert result['slave'] == 0x01  # default
+        assert result['scan_interval'] == 30  # default
+        assert result['connection'] == 'modbus'  # default
+        assert result['model'] is None  # default
+        assert result['smart_meter'] is False  # default
+        assert result['use_local_time'] is False  # default
+        assert result['log_console'] == 'WARNING'  # default
+        assert result['log_file'] == 'OFF'  # default
+        assert result['level'] == 1  # default
+
+    def test_build_inverter_config_with_custom_values(self):
+        """Test build_inverter_config uses provided values."""
+        funcs = self.get_config_functions()
+        build_inverter_config = funcs['build_inverter_config']
+
+        config = {
+            'inverter': {
+                'host': '10.0.0.1',
+                'port': 8502,
+                'timeout': 20,
+                'retries': 5,
+                'slave': 0x02,
+                'scan_interval': 60,
+                'connection': 'http',
+                'model': 'SH5K',
+                'smart_meter': True,
+                'use_local_time': True,
+                'log_console': 'DEBUG',
+                'log_file': 'INFO',
+                'level': 2
+            }
+        }
+
+        result = build_inverter_config(config)
+
+        assert result['host'] == '10.0.0.1'
+        assert result['port'] == 8502
+        assert result['timeout'] == 20
+        assert result['retries'] == 5
+        assert result['slave'] == 0x02
+        assert result['scan_interval'] == 60
+        assert result['connection'] == 'http'
+        assert result['model'] == 'SH5K'
+        assert result['smart_meter'] is True
+        assert result['use_local_time'] is True
+        assert result['log_console'] == 'DEBUG'
+        assert result['log_file'] == 'INFO'
+        assert result['level'] == 2
+
+    def test_build_inverter_config_missing_inverter_section(self):
+        """Test build_inverter_config raises ValueError when inverter section missing."""
+        funcs = self.get_config_functions()
+        build_inverter_config = funcs['build_inverter_config']
+
+        config = {
+            'exports': []
+        }
+
+        with pytest.raises(ValueError, match="missing 'inverter' section"):
+            build_inverter_config(config)
+
+    def test_build_inverter_config_empty_inverter_section(self):
+        """Test build_inverter_config works with empty inverter section (uses defaults)."""
+        funcs = self.get_config_functions()
+        build_inverter_config = funcs['build_inverter_config']
+
+        config = {
+            'inverter': {}
+        }
+
+        result = build_inverter_config(config)
+
+        # Should get all defaults
+        assert result['host'] is None
+        assert result['port'] == 502
+        assert result['connection'] == 'modbus'
